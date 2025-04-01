@@ -1,0 +1,1 @@
+To change the music, replace the audio URL in the <audio> tag with your preferred childhood-style music. The current version uses a placeholder - you might want to use something like a music box melody or nursery rhyme.
