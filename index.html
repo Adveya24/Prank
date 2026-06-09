@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>Adveya's Childhood Memories 🧸</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -223,10 +223,13 @@
             width: 100%;
             border-collapse: collapse;
             margin: 15px 0;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            display: block;
         }
         
         .viewers-table th, .viewers-table td {
-            padding: 10px;
+            padding: 8px;
             border: 1px solid #ddd;
             text-align: left;
         }
@@ -236,9 +239,13 @@
             color: white;
         }
         
-        .export-btn {
-            background: #4CAF50;
+        .export-btn, .send-btn {
             margin-top: 15px;
+            margin-right: 10px;
+        }
+        
+        .send-btn {
+            background: #4c8baf;
         }
         
         .music-control {
@@ -279,14 +286,15 @@
             input {
                 width: 90%;
             }
+            .viewers-table {
+                font-size: 0.7rem;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- Background music (auto plays but muted by default) -->
     <audio id="bgMusic" loop>
         <source src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" type="audio/mpeg">
-        <!-- You can replace with any childhood-style music -->
     </audio>
     
     <div class="music-control" id="musicControl"></div>
@@ -318,30 +326,32 @@
         
         <div class="admin-panel" id="adminPanel">
             <h3>Admin Panel</h3>
-            <table class="viewers-table" id="viewersTable">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>IP</th>
-                        <th>Time</th>
-                    </tr>
-                </thead>
-                <tbody id="viewersTableBody"></tbody>
-            </table>
-            <button class="export-btn" onclick="exportToExcel()">Export to Excel</button>
+            <div style="overflow-x: auto;">
+                <table class="viewers-table" id="viewersTable">
+                    <thead>
+                        <tr><th>Name</th><th>IP</th><th>Time</th><th>Location</th><th>Lat/Lng</th></tr>
+                    </thead>
+                    <tbody id="viewersTableBody"></tbody>
+                </table>
+            </div>
+            <button class="export-btn" onclick="exportToExcel()">📎 Export to Excel</button>
+            <p style="font-size: 0.8rem; margin-top:10px;">📍 Location is captured only if permission granted.</p>
         </div>
     </div>
 
     <script>
+        // ===================== CONFIGURATION =====================
+        // 🔽 REPLACE THIS URL WITH YOUR GOOGLE APPS SCRIPT WEB APP URL
+        const GOOGLE_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec';
+        // =========================================================
+        
         let viewers = [];
         const bgMusic = document.getElementById('bgMusic');
         const musicControl = document.getElementById('musicControl');
         
-        // Start music quietly (muted by default)
         bgMusic.volume = 0.2;
         bgMusic.play().catch(e => console.log("Auto-play prevented"));
         
-        // Music toggle control
         musicControl.addEventListener('click', () => {
             if (bgMusic.paused) {
                 bgMusic.play();
@@ -352,7 +362,7 @@
             }
         });
         
-        // Get IP address
+        // Get public IP
         async function getIP() {
             try {
                 const response = await fetch('https://api.ipify.org?format=json');
@@ -363,38 +373,137 @@
             }
         }
         
-        // Show last 10 fools
+        // Get location via browser Geolocation API + reverse geocoding
+        function getUserLocation() {
+            return new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    resolve({ lat: null, lng: null, locationName: "Geolocation not supported", raw: null });
+                    return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        // Reverse geocode using OpenStreetMap (free, no API key)
+                        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=0`)
+                            .then(res => res.json())
+                            .then(data => {
+                                const place = data.display_name || `${lat}, ${lng}`;
+                                resolve({ lat, lng, locationName: place, raw: { lat, lng } });
+                            })
+                            .catch(() => {
+                                resolve({ lat, lng, locationName: `${lat}, ${lng}`, raw: { lat, lng } });
+                            });
+                    },
+                    (error) => {
+                        let errMsg = "Location denied";
+                        if (error.code === 1) errMsg = "Permission denied";
+                        else if (error.code === 2) errMsg = "Position unavailable";
+                        else if (error.code === 3) errMsg = "Timeout";
+                        resolve({ lat: null, lng: null, locationName: errMsg, raw: null });
+                    },
+                    { timeout: 10000, enableHighAccuracy: false }
+                );
+            });
+        }
+        
+        // Send data to Google Sheet via Apps Script Web App
+        async function sendDataToGoogleSheet(data) {
+            if (!GOOGLE_APPS_SCRIPT_URL || GOOGLE_APPS_SCRIPT_URL.includes('YOUR_SCRIPT_ID')) {
+                console.warn("⚠️ Google Apps Script URL not set. Data not sent.");
+                return;
+            }
+            try {
+                const response = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors', // Needed for cross-origin requests to Google script
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                console.log("✅ Data sent to Google Sheet (no-cors mode, check sheet for new row)");
+            } catch (err) {
+                console.error("Failed to send data to Google Sheet:", err);
+            }
+        }
+        
+        // Show last 10 fools (names only)
         function showRecentFools() {
             const container = document.getElementById('foolsContainer');
             container.innerHTML = '';
-            
             const recentFools = viewers.slice(-10).reverse();
-            
             recentFools.forEach(fool => {
                 const badge = document.createElement('div');
                 badge.className = 'fool-badge';
                 badge.textContent = fool.name;
                 container.appendChild(badge);
             });
-            
             document.getElementById('foolsList').style.display = 'block';
         }
         
-        // Main function
+        // Update admin table (includes location)
+        function updateViewersTable() {
+            const tbody = document.getElementById('viewersTableBody');
+            tbody.innerHTML = '';
+            viewers.slice().reverse().forEach(viewer => {
+                const row = document.createElement('tr');
+                const locText = viewer.locationName || '';
+                const latLng = viewer.lat && viewer.lng ? `${viewer.lat.toFixed(4)}, ${viewer.lng.toFixed(4)}` : '';
+                row.innerHTML = `
+                    <td>${escapeHtml(viewer.name)}</td>
+                    <td>${viewer.ip}</td>
+                    <td>${viewer.time}</td>
+                    <td style="max-width:200px; word-break:break-word;">${escapeHtml(locText)}</td>
+                    <td>${latLng}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Simple escape to avoid XSS
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+        
+        // MAIN FUNCTION: verify identity, capture location, store, send to Google Sheet
         async function verifyIdentity() {
             const name = document.getElementById('userName').value.trim();
-            if (!name) return;
+            if (!name) {
+                alert("Please enter your name first :)");
+                return;
+            }
+            
+            // Disable button briefly to avoid double submit
+            const btn = event ? event.target : document.querySelector('button');
+            if (btn) btn.disabled = true;
             
             const ip = await getIP();
+            const locationData = await getUserLocation();
             const time = new Date().toLocaleString();
             
-            viewers.push({ name, ip, time });
-            showRecentFools();
+            const newRecord = {
+                name: name,
+                ip: ip,
+                time: time,
+                lat: locationData.lat,
+                lng: locationData.lng,
+                locationName: locationData.locationName
+            };
+            viewers.push(newRecord);
             
+            showRecentFools();
+            updateViewersTable();   // admin table will update if visible
+            
+            // Show prank message
             document.getElementById('victimName').textContent = name;
             document.getElementById('prankMessage').style.display = 'block';
             
-            // Show video after delay
+            // Show Rick Roll video
             setTimeout(() => {
                 document.getElementById('videoContainer').style.display = 'block';
                 document.getElementById('videoContainer').innerHTML = `
@@ -403,41 +512,46 @@
                 `;
             }, 1000);
             
-            // Show admin tools if name is "admin"
+            // Show admin panel if name is exactly "admin"
             if (name.toLowerCase() === 'admin') {
                 document.getElementById('adminPanel').style.display = 'block';
-                updateViewersTable();
             }
-        }
-        
-        // Update the viewers table
-        function updateViewersTable() {
-            const tbody = document.getElementById('viewersTableBody');
-            tbody.innerHTML = '';
             
-            viewers.slice().reverse().forEach(viewer => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${viewer.name}</td>
-                    <td>${viewer.ip}</td>
-                    <td>${viewer.time}</td>
-                `;
-                tbody.appendChild(row);
+            // ---------- SEND DATA TO GOOGLE SHEET ----------
+            await sendDataToGoogleSheet({
+                name: name,
+                ip: ip,
+                locationName: locationData.locationName,
+                latitude: locationData.lat,
+                longitude: locationData.lng
             });
+            // ----------------------------------------------
+            
+            if (btn) btn.disabled = false;
         }
         
-        // Export to Excel
+        // Export to Excel including location columns
         function exportToExcel() {
             const data = [
-                ['Name', 'IP Address', 'Timestamp'],
-                ...viewers.map(v => [v.name, v.ip, v.time])
+                ['Name', 'IP Address', 'Timestamp', 'Location Name', 'Latitude', 'Longitude'],
+                ...viewers.map(v => [
+                    v.name, 
+                    v.ip, 
+                    v.time, 
+                    v.locationName || '', 
+                    v.lat !== null ? v.lat : '', 
+                    v.lng !== null ? v.lng : ''
+                ])
             ];
-            
             const wb = XLSX.utils.book_new();
             const ws = XLSX.utils.aoa_to_sheet(data);
-            XLSX.utils.book_append_sheet(wb, ws, "Viewers");
-            XLSX.writeFile(wb, "Adveya_Viewers.xlsx");
+            XLSX.utils.book_append_sheet(wb, ws, "Viewers_With_Location");
+            XLSX.writeFile(wb, `Adveya_Viewers_${new Date().toISOString().slice(0,19)}.xlsx`);
         }
+        
+        // Expose functions globally
+        window.verifyIdentity = verifyIdentity;
+        window.exportToExcel = exportToExcel;
     </script>
 </body>
 </html>
